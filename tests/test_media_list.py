@@ -17,6 +17,7 @@ import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+import pytest
 from PySide6.QtCore import Qt
 
 from core.models import MediaFile, MediaKind
@@ -28,6 +29,48 @@ from ui.widgets.media_list import MediaListWidget
 # resultado era dois donos Python para o mesmo objeto C++: ao desmontar a de
 # módulo, o Qt avisava "shared QObject was deleted directly" e o interpretador
 # morria com SIGSEGV no fim da suíte — exit 139, sem nenhum teste vermelho.
+
+
+@pytest.fixture
+def make_widget(qt_app):
+    """Cria widgets e os destrói enquanto a QApplication ainda está viva.
+
+    Não é zelo decorativo: deixar o widget ser coletado pelo garbage collector
+    no encerramento do interpretador derruba o processo com PySide6 6.12.0 —
+    os 64 testes passam e o processo morre em seguida (SIGSEGV/SIGBUS),
+    quebrando o CI sem nenhum teste vermelho para explicar. Destruir aqui
+    mantém a ordem de destruição dentro do tempo de vida da aplicação.
+    """
+    created: list[MediaListWidget] = []
+
+    def factory() -> MediaListWidget:
+        widget = MediaListWidget()
+        created.append(widget)
+        return widget
+
+    yield factory
+
+    for widget in created:
+        widget.setParent(None)
+        widget.deleteLater()
+    qt_app.processEvents()
+
+
+@pytest.fixture
+def make_model(qt_app):
+    """Mesma razão da `make_widget`, para o modelo usado fora de um widget."""
+    created: list[MediaTableModel] = []
+
+    def factory() -> MediaTableModel:
+        model = MediaTableModel()
+        created.append(model)
+        return model
+
+    yield factory
+
+    for model in created:
+        model.deleteLater()
+    qt_app.processEvents()
 
 
 def media(message_id: int, name: str, kind: MediaKind = MediaKind.VIDEO) -> MediaFile:
@@ -47,12 +90,12 @@ def displayed(widget: MediaListWidget) -> list[str]:
 # ----------------------------------------------------------------------
 # Modelo
 # ----------------------------------------------------------------------
-def test_set_files_nao_compartilha_a_lista_recebida(qt_app):
+def test_set_files_nao_compartilha_a_lista_recebida(make_model):
     # Se o modelo guardasse a própria lista do chamador, mutá-la fora daqui
     # inseriria linhas sem o modelo saber — e `append_files` duplicaria a
     # última página carregada.
     files = [media(30, "c.mkv"), media(20, "b.mkv")]
-    model = MediaTableModel()
+    model = make_model()
     model.set_files(files)
 
     files.append(media(10, "a.mkv"))
@@ -60,8 +103,8 @@ def test_set_files_nao_compartilha_a_lista_recebida(qt_app):
     assert model.rowCount() == 2
 
 
-def test_prepend_mantem_a_selecao_no_arquivo_certo(qt_app):
-    model = MediaTableModel()
+def test_prepend_mantem_a_selecao_no_arquivo_certo(make_model):
+    model = make_model()
     model.set_files([media(30, "c.mkv"), media(20, "b.mkv"), media(10, "a.mkv")])
     model.setData(model.index(1, 0), Qt.Checked, Qt.CheckStateRole)
 
@@ -73,8 +116,8 @@ def test_prepend_mantem_a_selecao_no_arquivo_certo(qt_app):
     assert model.data(model.index(2, 0), Qt.CheckStateRole) == Qt.Checked
 
 
-def test_prepend_insere_no_topo_na_ordem_recebida(qt_app):
-    model = MediaTableModel()
+def test_prepend_insere_no_topo_na_ordem_recebida(make_model):
+    model = make_model()
     model.set_files([media(10, "antigo.mkv")])
 
     model.prepend_files([media(31, "novo2.mkv"), media(30, "novo1.mkv")])
@@ -89,8 +132,8 @@ def test_prepend_insere_no_topo_na_ordem_recebida(qt_app):
 # ----------------------------------------------------------------------
 # Widget
 # ----------------------------------------------------------------------
-def test_carregar_mais_nao_duplica_a_pagina(qt_app):
-    widget = MediaListWidget()
+def test_carregar_mais_nao_duplica_a_pagina(make_widget):
+    widget = make_widget()
     widget.set_files([media(30, "c.mkv"), media(20, "b.mkv")])
 
     widget.append_files([media(10, "a.mkv")])
@@ -98,8 +141,8 @@ def test_carregar_mais_nao_duplica_a_pagina(qt_app):
     assert displayed(widget) == ["c.mkv", "b.mkv", "a.mkv"]
 
 
-def test_atualizar_traz_so_o_que_e_novo(qt_app):
-    widget = MediaListWidget()
+def test_atualizar_traz_so_o_que_e_novo(make_widget):
+    widget = make_widget()
     widget.set_files([media(30, "c.mkv"), media(20, "b.mkv")])
 
     added = widget.prepend_new_files([media(40, "novo.mkv"), media(30, "c.mkv")])
@@ -108,8 +151,8 @@ def test_atualizar_traz_so_o_que_e_novo(qt_app):
     assert displayed(widget) == ["novo.mkv", "c.mkv", "b.mkv"]
 
 
-def test_atualizar_duas_vezes_nao_repete_arquivo(qt_app):
-    widget = MediaListWidget()
+def test_atualizar_duas_vezes_nao_repete_arquivo(make_widget):
+    widget = make_widget()
     widget.set_files([media(20, "b.mkv")])
     widget.prepend_new_files([media(30, "novo.mkv")])
 
@@ -117,8 +160,8 @@ def test_atualizar_duas_vezes_nao_repete_arquivo(qt_app):
     assert displayed(widget) == ["novo.mkv", "b.mkv"]
 
 
-def test_atualizar_respeita_o_filtro_ativo(qt_app):
-    widget = MediaListWidget()
+def test_atualizar_respeita_o_filtro_ativo(make_widget):
+    widget = make_widget()
     widget.set_files([media(20, "serie.mkv")])
     widget.search_edit.setText("serie")
 
@@ -133,8 +176,8 @@ def test_atualizar_respeita_o_filtro_ativo(qt_app):
     assert displayed(widget) == ["filme.mkv", "serie2.mkv", "serie.mkv"]
 
 
-def test_atualizar_respeita_o_filtro_de_tipo(qt_app):
-    widget = MediaListWidget()
+def test_atualizar_respeita_o_filtro_de_tipo(make_widget):
+    widget = make_widget()
     widget.set_files([media(20, "video.mkv", MediaKind.VIDEO)])
     widget.type_combo.setCurrentText("Vídeos")
 
@@ -143,8 +186,8 @@ def test_atualizar_respeita_o_filtro_de_tipo(qt_app):
     assert displayed(widget) == ["video.mkv"]
 
 
-def test_botao_atualizar_comeca_desabilitado_e_nao_emite(qt_app):
-    widget = MediaListWidget()
+def test_botao_atualizar_comeca_desabilitado_e_nao_emite(make_widget):
+    widget = make_widget()
     emitted: list[int] = []
     widget.refresh_requested.connect(lambda: emitted.append(1))
 
@@ -159,8 +202,8 @@ def test_botao_atualizar_comeca_desabilitado_e_nao_emite(qt_app):
     assert emitted == [1]
 
 
-def test_set_refreshing_trava_o_botao_durante_a_consulta(qt_app):
-    widget = MediaListWidget()
+def test_set_refreshing_trava_o_botao_durante_a_consulta(make_widget):
+    widget = make_widget()
     widget.set_refresh_enabled(True)
 
     widget.set_refreshing(True)
