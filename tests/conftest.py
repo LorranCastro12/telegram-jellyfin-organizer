@@ -14,13 +14,17 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-# Referência de módulo proposital: sem ela, a única referência viva ao
-# QApplication é a variável local da fixture, que some quando a sessão
-# termina. O coletor de lixo então destrói o QApplication enquanto objetos
-# e tipos do Qt ainda estão sendo finalizados, e o interpretador morre com
-# SIGSEGV *depois* de todos os testes terem passado — exit 139, que derruba
-# o CI sem nenhum teste vermelho para explicar o motivo. Não reproduz em
-# máquina com display; aparece em runner headless.
+# Esta é a ÚNICA fixture que pode criar ou guardar a QApplication. Todo
+# módulo de teste que precise do Qt deve pedir `qt_app`, nunca montar a sua
+# própria — já houve uma fixture `qapp` duplicada em test_media_list.py, e o
+# efeito era dois donos Python para o mesmo objeto C++: ao desmontar a de
+# escopo menor, o Qt reclamava "shared QObject was deleted directly" e o
+# interpretador morria com SIGSEGV no fim da suíte (exit 139, sem nenhum
+# teste vermelho para explicar o motivo). Só se manifestava em runner
+# headless, nunca em máquina com display.
+#
+# A referência de módulo mantém o objeto vivo pela sessão inteira, em vez de
+# depender da variável local da fixture.
 _qt_app = None
 
 

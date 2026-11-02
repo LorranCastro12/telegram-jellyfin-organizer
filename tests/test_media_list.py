@@ -17,19 +17,17 @@ import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-import pytest
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication
 
 from core.models import MediaFile, MediaKind
 from ui.models import MediaTableModel
 from ui.widgets.media_list import MediaListWidget
 
-
-@pytest.fixture(scope="module")
-def qapp():
-    app = QApplication.instance() or QApplication([])
-    yield app
+# A QApplication vem da fixture `qt_app` do conftest, de escopo de sessão.
+# Este módulo já teve a sua própria fixture `qapp`, de escopo de módulo, e o
+# resultado era dois donos Python para o mesmo objeto C++: ao desmontar a de
+# módulo, o Qt avisava "shared QObject was deleted directly" e o interpretador
+# morria com SIGSEGV no fim da suíte — exit 139, sem nenhum teste vermelho.
 
 
 def media(message_id: int, name: str, kind: MediaKind = MediaKind.VIDEO) -> MediaFile:
@@ -49,7 +47,7 @@ def displayed(widget: MediaListWidget) -> list[str]:
 # ----------------------------------------------------------------------
 # Modelo
 # ----------------------------------------------------------------------
-def test_set_files_nao_compartilha_a_lista_recebida(qapp):
+def test_set_files_nao_compartilha_a_lista_recebida(qt_app):
     # Se o modelo guardasse a própria lista do chamador, mutá-la fora daqui
     # inseriria linhas sem o modelo saber — e `append_files` duplicaria a
     # última página carregada.
@@ -62,7 +60,7 @@ def test_set_files_nao_compartilha_a_lista_recebida(qapp):
     assert model.rowCount() == 2
 
 
-def test_prepend_mantem_a_selecao_no_arquivo_certo(qapp):
+def test_prepend_mantem_a_selecao_no_arquivo_certo(qt_app):
     model = MediaTableModel()
     model.set_files([media(30, "c.mkv"), media(20, "b.mkv"), media(10, "a.mkv")])
     model.setData(model.index(1, 0), Qt.Checked, Qt.CheckStateRole)
@@ -75,7 +73,7 @@ def test_prepend_mantem_a_selecao_no_arquivo_certo(qapp):
     assert model.data(model.index(2, 0), Qt.CheckStateRole) == Qt.Checked
 
 
-def test_prepend_insere_no_topo_na_ordem_recebida(qapp):
+def test_prepend_insere_no_topo_na_ordem_recebida(qt_app):
     model = MediaTableModel()
     model.set_files([media(10, "antigo.mkv")])
 
@@ -91,7 +89,7 @@ def test_prepend_insere_no_topo_na_ordem_recebida(qapp):
 # ----------------------------------------------------------------------
 # Widget
 # ----------------------------------------------------------------------
-def test_carregar_mais_nao_duplica_a_pagina(qapp):
+def test_carregar_mais_nao_duplica_a_pagina(qt_app):
     widget = MediaListWidget()
     widget.set_files([media(30, "c.mkv"), media(20, "b.mkv")])
 
@@ -100,7 +98,7 @@ def test_carregar_mais_nao_duplica_a_pagina(qapp):
     assert displayed(widget) == ["c.mkv", "b.mkv", "a.mkv"]
 
 
-def test_atualizar_traz_so_o_que_e_novo(qapp):
+def test_atualizar_traz_so_o_que_e_novo(qt_app):
     widget = MediaListWidget()
     widget.set_files([media(30, "c.mkv"), media(20, "b.mkv")])
 
@@ -110,7 +108,7 @@ def test_atualizar_traz_so_o_que_e_novo(qapp):
     assert displayed(widget) == ["novo.mkv", "c.mkv", "b.mkv"]
 
 
-def test_atualizar_duas_vezes_nao_repete_arquivo(qapp):
+def test_atualizar_duas_vezes_nao_repete_arquivo(qt_app):
     widget = MediaListWidget()
     widget.set_files([media(20, "b.mkv")])
     widget.prepend_new_files([media(30, "novo.mkv")])
@@ -119,7 +117,7 @@ def test_atualizar_duas_vezes_nao_repete_arquivo(qapp):
     assert displayed(widget) == ["novo.mkv", "b.mkv"]
 
 
-def test_atualizar_respeita_o_filtro_ativo(qapp):
+def test_atualizar_respeita_o_filtro_ativo(qt_app):
     widget = MediaListWidget()
     widget.set_files([media(20, "serie.mkv")])
     widget.search_edit.setText("serie")
@@ -135,7 +133,7 @@ def test_atualizar_respeita_o_filtro_ativo(qapp):
     assert displayed(widget) == ["filme.mkv", "serie2.mkv", "serie.mkv"]
 
 
-def test_atualizar_respeita_o_filtro_de_tipo(qapp):
+def test_atualizar_respeita_o_filtro_de_tipo(qt_app):
     widget = MediaListWidget()
     widget.set_files([media(20, "video.mkv", MediaKind.VIDEO)])
     widget.type_combo.setCurrentText("Vídeos")
@@ -145,7 +143,7 @@ def test_atualizar_respeita_o_filtro_de_tipo(qapp):
     assert displayed(widget) == ["video.mkv"]
 
 
-def test_botao_atualizar_comeca_desabilitado_e_nao_emite(qapp):
+def test_botao_atualizar_comeca_desabilitado_e_nao_emite(qt_app):
     widget = MediaListWidget()
     emitted: list[int] = []
     widget.refresh_requested.connect(lambda: emitted.append(1))
@@ -161,7 +159,7 @@ def test_botao_atualizar_comeca_desabilitado_e_nao_emite(qapp):
     assert emitted == [1]
 
 
-def test_set_refreshing_trava_o_botao_durante_a_consulta(qapp):
+def test_set_refreshing_trava_o_botao_durante_a_consulta(qt_app):
     widget = MediaListWidget()
     widget.set_refresh_enabled(True)
 
