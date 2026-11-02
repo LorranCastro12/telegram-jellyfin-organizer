@@ -260,6 +260,19 @@ class MainWindow(QMainWindow):
         self.settings_manager.save(self.settings)
 
     def _on_media_ready(self, files: list[MediaFile], has_more: bool) -> None:
+        # Resposta atrasada de um grupo que o usuário já trocou: descarta.
+        # Sem esta guarda, pedir "Carregar mais" e clicar em outro grupo antes
+        # da resposta chegar misturava os arquivos dos dois grupos na mesma
+        # lista — a página que volta é anexada à listagem do grupo novo.
+        if files and self.current_group and files[0].group_id != self.current_group.id:
+            logger.debug(
+                "Ignorando %d arquivos do grupo %s; o grupo aberto agora é %s.",
+                len(files),
+                files[0].group_id,
+                self.current_group.id,
+            )
+            return
+
         if self._load_more_offset == 0:
             self.media_list_widget.set_files(files)
         else:

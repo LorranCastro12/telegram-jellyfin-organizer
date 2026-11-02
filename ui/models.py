@@ -52,7 +52,24 @@ class MediaTableModel(QAbstractTableModel):
         return self._files[row]
 
     def checked_files(self) -> List[MediaFile]:
-        return [f for f in self._files if f.message_id in self._checked]
+        """Arquivos marcados, no máximo um por `message_id`.
+
+        A desduplicação aqui é a segunda linha de defesa: quem alimenta o
+        modelo já evita inserir o mesmo arquivo duas vezes, mas esta lista vai
+        direto para a fila de downloads. Se uma linha repetida escapar, o
+        prejuízo é baixar o mesmo arquivo duas vezes em cima do mesmo destino
+        — então o custo de garantir aqui é menor que o risco.
+        """
+        seen: set[int] = set()
+        unique: List[MediaFile] = []
+        for media_file in self._files:
+            if media_file.message_id not in self._checked:
+                continue
+            if media_file.message_id in seen:
+                continue
+            seen.add(media_file.message_id)
+            unique.append(media_file)
+        return unique
 
     def set_all_checked(self, checked: bool) -> None:
         self.beginResetModel()

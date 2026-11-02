@@ -97,10 +97,29 @@ class MediaListWidget(QWidget):
         self._known_ids = {f.message_id for f in files}
         self.model.set_files(files)
 
-    def append_files(self, files: List[MediaFile]) -> None:
-        self._all_files.extend(files)
-        self._known_ids.update(f.message_id for f in files)
-        self.model.append_files(files)
+    def append_files(self, files: List[MediaFile]) -> List[MediaFile]:
+        """Acrescenta ao fim os arquivos que ainda não estão na lista.
+
+        A deduplicação por `message_id` existe pelo mesmo motivo que em
+        `prepend_new_files`, e é o que torna "Carregar mais" idempotente: o
+        botão não é desabilitado durante a consulta, então dois cliques
+        seguidos disparam duas requisições com o mesmo `offset_id` e trazem a
+        mesma página duas vezes. Sem isto, cada arquivo dessa página entrava
+        duplicado na tabela — e, ao ser marcado, ia parar duas vezes na fila
+        de downloads, baixando o mesmo arquivo em dobro.
+
+        Devolve apenas os que de fato eram novos.
+        """
+        new_files = [f for f in files if f.message_id not in self._known_ids]
+        if not new_files:
+            return []
+
+        self._all_files.extend(new_files)
+        self._known_ids.update(f.message_id for f in new_files)
+        # Respeita o filtro ativo, igual a `prepend_new_files`: o que não casa
+        # fica em `_all_files` e aparece quando o filtro mudar.
+        self.model.append_files([f for f in new_files if self._matches_filter(f)])
+        return new_files
 
     def prepend_new_files(self, files: List[MediaFile]) -> List[MediaFile]:
         """Insere no topo os arquivos que ainda não estão na lista.

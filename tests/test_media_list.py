@@ -212,3 +212,79 @@ def test_set_refreshing_trava_o_botao_durante_a_consulta(make_widget):
     widget.set_refreshing(False)
     assert widget.refresh_btn.isEnabled()
     assert widget.refresh_btn.text() == "⟳ Atualizar"
+
+
+# ----------------------------------------------------------------------
+# Regressão: arquivo duplicado na fila de downloads
+# ----------------------------------------------------------------------
+# Relatado em uso real: ao marcar um arquivo, ele aparecia duas vezes na lista
+# para baixar. Causa: "Carregar mais" não desabilita o botão durante a
+# consulta, então dois cliques disparam duas requisições com o mesmo
+# offset_id e a mesma página volta duas vezes. `append_files` acrescentava sem
+# conferir o que já estava na lista — e `checked_files` devolvia a linha
+# repetida duas vezes, enfileirando o mesmo download em dobro.
+def test_carregar_mais_duas_vezes_nao_duplica(make_widget):
+    widget = make_widget()
+    widget.set_files([media(30, "c.mkv"), media(20, "b.mkv")])
+    pagina = [media(10, "a.mkv")]
+
+    widget.append_files(pagina)
+    widget.append_files(pagina)
+
+    assert displayed(widget) == ["c.mkv", "b.mkv", "a.mkv"]
+
+
+def test_marcar_arquivo_enfileira_uma_vez_so(make_widget):
+    widget = make_widget()
+    widget.set_files([media(30, "c.mkv")])
+    pagina = [media(10, "a.mkv")]
+    widget.append_files(pagina)
+    widget.append_files(pagina)
+
+    row = next(
+        r for r in range(widget.model.rowCount())
+        if widget.model.file_at(r).file_name == "a.mkv"
+    )
+    widget.model.setData(widget.model.index(row, 0), Qt.Checked, Qt.CheckStateRole)
+
+    marcados = widget.model.checked_files()
+    assert [m.file_name for m in marcados] == ["a.mkv"]
+
+
+def test_append_devolve_so_o_que_era_novo(make_widget):
+    widget = make_widget()
+    widget.set_files([media(30, "c.mkv")])
+
+    primeira = widget.append_files([media(20, "b.mkv"), media(10, "a.mkv")])
+    repetida = widget.append_files([media(20, "b.mkv")])
+    mista = widget.append_files([media(10, "a.mkv"), media(5, "novo.mkv")])
+
+    assert [f.file_name for f in primeira] == ["b.mkv", "a.mkv"]
+    assert repetida == []
+    assert [f.file_name for f in mista] == ["novo.mkv"]
+
+
+def test_carregar_mais_respeita_o_filtro_ativo(make_widget):
+    # Mesma regra de prepend_new_files: o que não casa com o filtro fica
+    # guardado e reaparece quando o filtro muda, em vez de furar a busca.
+    widget = make_widget()
+    widget.set_files([media(30, "serie.mkv")])
+    widget.search_edit.setText("serie")
+
+    widget.append_files([media(20, "filme.mkv"), media(10, "serie2.mkv")])
+
+    assert displayed(widget) == ["serie.mkv", "serie2.mkv"]
+
+    widget.search_edit.clear()
+    assert displayed(widget) == ["serie.mkv", "filme.mkv", "serie2.mkv"]
+
+
+def test_checked_files_nao_repete_mesmo_com_linha_duplicada(make_model):
+    # Defesa de segunda linha: mesmo que uma linha repetida escape para o
+    # modelo, a fila de downloads não pode receber o arquivo duas vezes.
+    model = make_model()
+    repetido = media(10, "a.mkv")
+    model.set_files([media(30, "c.mkv"), repetido, repetido])
+    model.setData(model.index(1, 0), Qt.Checked, Qt.CheckStateRole)
+
+    assert [f.file_name for f in model.checked_files()] == ["a.mkv"]
