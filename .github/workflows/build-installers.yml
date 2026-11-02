@@ -35,6 +35,15 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements-dev.txt
 
+      # Necessário mesmo com QT_QPA_PLATFORM=offscreen: o import do PySide6
+      # carrega libEGL antes de qualquer plataforma ser escolhida, então sem
+      # isto os testes de widget nem chegam a ser coletados.
+      - name: Bibliotecas de sistema do Qt
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1 libgl1 libxkbcommon-x11-0 \
+            libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0
+
       - name: pytest
         env:
           QT_QPA_PLATFORM: offscreen
