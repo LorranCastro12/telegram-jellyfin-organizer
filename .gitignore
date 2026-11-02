@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+build/
+dist/
+
+# Testes
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Dados sensíveis / específicos da máquina do usuário
+*.session
+*.session-journal
+credentials.enc
+.key
+settings.json
+
+# IDEs
+.vscode/
+.idea/
+
+# SO
+.DS_Store
+Thumbs.db

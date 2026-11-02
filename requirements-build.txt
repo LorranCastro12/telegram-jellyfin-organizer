@@ -1,0 +1,5 @@
+# Dependências usadas apenas para gerar os instaladores (não são necessárias
+# para rodar nem para desenvolver o app). Veja packaging/README.md.
+-r requirements.txt
+pyinstaller>=6.6.0
+pillow>=10.0.0

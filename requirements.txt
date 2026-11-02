@@ -1,0 +1,6 @@
+PySide6>=6.7.0
+Telethon>=1.36.0
+cryptography>=42.0.0
+keyring>=25.2.0
+platformdirs>=4.2.0
+guessit>=3.8.0
