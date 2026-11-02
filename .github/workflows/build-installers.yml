@@ -35,19 +35,30 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements-dev.txt
 
-      # Necessário mesmo com QT_QPA_PLATFORM=offscreen: o import do PySide6
-      # carrega libEGL antes de qualquer plataforma ser escolhida, então sem
-      # isto os testes de widget nem chegam a ser coletados.
+      # libEGL é necessária já no import do PySide6, antes de qualquer
+      # plataforma Qt ser escolhida — sem ela os testes de widget nem chegam
+      # a ser coletados. O xvfb fornece o display virtual (veja o passo do
+      # pytest).
       - name: Bibliotecas de sistema do Qt
         run: |
           sudo apt-get update
-          sudo apt-get install -y libegl1 libgl1 libxkbcommon-x11-0 \
+          sudo apt-get install -y xvfb libegl1 libgl1 libxkbcommon-x11-0 \
             libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0
 
+      # Roda sob um servidor X virtual em vez do plugin `offscreen` do Qt.
+      # Motivo: com `offscreen` neste runner, os 64 testes passavam e o
+      # processo morria *em seguida*, no encerramento do interpretador —
+      # primeiro SIGSEGV, depois SIGBUS — derrubando o job com exit 139/135
+      # sem nenhum teste vermelho. Não reproduz em máquina com display, nem
+      # com a mesma versão de pytest do runner. O xcb sobre xvfb é a
+      # configuração sob a qual o Qt é efetivamente testado.
+      #
+      # QT_QPA_PLATFORM é lido com `setdefault` em conftest.py, então defini-lo
+      # aqui tem precedência sem precisar mudar os testes.
       - name: pytest
         env:
-          QT_QPA_PLATFORM: offscreen
-        run: pytest tests/ -v
+          QT_QPA_PLATFORM: xcb
+        run: xvfb-run -a --server-args="-screen 0 1280x1024x24" pytest tests/ -v
 
   linux:
     name: Linux (.run + .deb)
