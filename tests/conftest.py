@@ -14,10 +14,21 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+# Referência de módulo proposital: sem ela, a única referência viva ao
+# QApplication é a variável local da fixture, que some quando a sessão
+# termina. O coletor de lixo então destrói o QApplication enquanto objetos
+# e tipos do Qt ainda estão sendo finalizados, e o interpretador morre com
+# SIGSEGV *depois* de todos os testes terem passado — exit 139, que derruba
+# o CI sem nenhum teste vermelho para explicar o motivo. Não reproduz em
+# máquina com display; aparece em runner headless.
+_qt_app = None
+
 
 @pytest.fixture(scope="session")
 def qt_app():
+    global _qt_app
     from PySide6.QtWidgets import QApplication
 
-    app = QApplication.instance() or QApplication([])
-    yield app
+    if _qt_app is None:
+        _qt_app = QApplication.instance() or QApplication([])
+    return _qt_app

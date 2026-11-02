@@ -194,6 +194,35 @@ def test_erro_de_permissao_vira_mensagem_amigavel(wizard, fake_payload, targets,
         locked.chmod(0o700)  # senão o tmp_path não é removível
 
 
+def test_instala_em_sistema_sem_utilitarios_de_desktop(
+    wizard, fake_payload, targets, monkeypatch
+):
+    """Distro enxuta, sem `update-desktop-database`/`gio`/`xdg-user-dir`.
+
+    Regressão: `subprocess.run(..., check=False)` não cobre binário ausente —
+    `check=False` só silencia código de saída, enquanto o executável
+    inexistente levanta FileNotFoundError. O resultado era a instalação
+    abortar com "Falha ao instalar" *depois* de já ter copiado tudo.
+    """
+    sem_utilitarios = targets.install_dir.parent / "path-vazio"
+    sem_utilitarios.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("PATH", str(sem_utilitarios))
+
+    ok, detail = _run(
+        wizard, fake_payload, targets, menu_shortcut=True, desktop_shortcut=True
+    )
+
+    assert ok, detail
+    assert (targets.install_dir / "telegram-jellyfin-organizer").exists()
+    assert (targets.applications_dir / "telegram-jellyfin-organizer.desktop").exists()
+
+
+def test_run_optional_tolera_comando_inexistente(wizard):
+    assert wizard.run_optional(["este-binario-nao-existe-em-lugar-nenhum"]) is False
+    assert wizard.run_optional(["true"]) is True
+    assert wizard.run_optional(["false"]) is False
+
+
 def test_targets_padrao_respeitam_xdg_data_home(wizard, tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
     monkeypatch.setattr(wizard.os, "geteuid", lambda: 1000)

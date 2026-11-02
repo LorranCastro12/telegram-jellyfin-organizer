@@ -205,6 +205,25 @@ class Options:
     path_symlink: bool = True
 
 
+def run_optional(command: list[str]) -> bool:
+    """Executa um utilitário de desktop que pode simplesmente não existir.
+
+    `subprocess.run(..., check=False)` **não** cobre este caso: `check=False`
+    silencia código de saída diferente de zero, mas o binário ausente levanta
+    FileNotFoundError antes disso. Numa distro enxuta (ou num container sem
+    `desktop-file-utils`), isso derrubava a instalação inteira depois de os
+    arquivos já terem sido copiados.
+
+    Nenhum destes comandos é essencial — são otimizações de integração com o
+    desktop. Falhar neles jamais pode falhar a instalação.
+    """
+    try:
+        result = subprocess.run(command, capture_output=True, check=False)
+    except (FileNotFoundError, OSError):
+        return False
+    return result.returncode == 0
+
+
 # ----------------------------------------------------------------------------
 # Worker: a cópia roda fora da thread da UI para a barra de progresso andar
 # ----------------------------------------------------------------------------
@@ -341,11 +360,7 @@ class InstallWorker(QObject):
                 link.write_text(self._desktop_entry(exec_path, icon_name), encoding="utf-8")
                 link.chmod(link.stat().st_mode | stat.S_IXUSR)
                 # GNOME exige que o lançador seja marcado como confiável.
-                subprocess.run(
-                    ["gio", "set", str(link), "metadata::trusted", "true"],
-                    capture_output=True,
-                    check=False,
-                )
+                run_optional(["gio", "set", str(link), "metadata::trusted", "true"])
                 created.append(link)
 
         if self.options.path_symlink:
@@ -363,11 +378,7 @@ class InstallWorker(QObject):
         self.progress.emit(98, "Gerando o desinstalador...")
         self._write_uninstaller(install_dir, created)
 
-        subprocess.run(
-            ["update-desktop-database", str(self.targets.applications_dir)],
-            capture_output=True,
-            check=False,
-        )
+        run_optional(["update-desktop-database", str(self.targets.applications_dir)])
 
         self.progress.emit(100, "Instalação concluída.")
         self.finished.emit(True, str(exec_path))
@@ -381,7 +392,7 @@ class InstallWorker(QObject):
             )
             if result.returncode == 0 and result.stdout.strip():
                 return Path(result.stdout.strip())
-        except FileNotFoundError:
+        except (FileNotFoundError, OSError):
             pass
         fallback = Path.home() / "Desktop"
         return fallback if fallback.exists() else None
