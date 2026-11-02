@@ -304,7 +304,7 @@ class TelegramWorker(QThread):
             # Fatia cheia significa que a varredura parou por orçamento, e não
             # por fim de histórico: provavelmente há mais para trás.
             page.hit_limit = scanned >= limit
-            logger.debug(
+            logger.info(
                 "Grupo %s: %d mensagens varridas a partir de %s, %d arquivo(s).",
                 group_id, scanned, offset_id or "topo", len(page.files),
             )
@@ -359,7 +359,7 @@ class TelegramWorker(QThread):
                 if media_file:
                     page.files.append(media_file)
             page.hit_limit = scanned >= limit
-            logger.debug(
+            logger.info(
                 "Grupo %s: %d mensagens novas depois de %s, %d arquivo(s).",
                 group_id, scanned, after_message_id, len(page.files),
             )
