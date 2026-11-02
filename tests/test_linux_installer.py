@@ -51,6 +51,25 @@ def wizard(qt_app):  # qt_app garante QApplication antes de tocar em QtWidgets
     return _load_wizard_module()
 
 
+@pytest.fixture(autouse=True)
+def area_de_trabalho_isolada(wizard, tmp_path: Path, monkeypatch):
+    """Redireciona a Área de Trabalho do usuário para um tmp_path.
+
+    Não é cosmético: `_previous_install_dirs` lê o `.desktop` da Área de
+    Trabalho para descobrir onde está a versão anterior, e `_install` remove o
+    que encontra. Sem este redirecionamento, rodar a suíte numa máquina que
+    tenha o programa instalado com atalho na Área de Trabalho apagaria a
+    instalação de verdade do usuário. Autouse de propósito — vale para todo
+    teste do módulo, inclusive os que ainda não existem.
+    """
+    fake_desktop = tmp_path / "area-de-trabalho"
+    fake_desktop.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(
+        wizard.InstallWorker, "_user_desktop_dir", staticmethod(lambda: fake_desktop)
+    )
+    return fake_desktop
+
+
 @pytest.fixture
 def fake_payload(tmp_path: Path) -> Path:
     """Imita o layout do bundle do PyInstaller, sem os 222 MB de Qt."""
@@ -84,7 +103,8 @@ def targets(wizard, tmp_path: Path):
 
 
 def _run(wizard, source: Path, targets, **option_kwargs):
-    options = wizard.Options(install_dir=targets.install_dir, **option_kwargs)
+    install_dir = option_kwargs.pop("install_dir", targets.install_dir)
+    options = wizard.Options(install_dir=install_dir, **option_kwargs)
     worker = wizard.InstallWorker(source, options, targets)
     results: list[tuple[bool, str]] = []
     worker.finished.connect(lambda ok, detail: results.append((ok, detail)))
@@ -241,3 +261,107 @@ def test_como_root_instala_para_todo_o_sistema(wizard, monkeypatch):
     assert detected.install_dir == Path("/opt/telegram-jellyfin-organizer")
     assert detected.applications_dir == Path("/usr/share/applications")
     assert detected.system_wide
+
+
+# ----------------------------------------------------------------------
+# Atualizar deve excluir a versão anterior, inclusive em outra pasta
+# ----------------------------------------------------------------------
+def test_remove_instalacao_anterior_em_outra_pasta(
+    wizard, fake_payload, targets, tmp_path
+):
+    """Trocar a pasta de instalação não pode deixar duas versões no disco.
+
+    Instalar por cima já limpava a pasta de destino, mas a versão anterior
+    pode estar em outro lugar — o usuário mudou a pasta no assistente, ou
+    antes instalou como root em /opt e agora como usuário comum. A cópia velha
+    ficava no disco, e o atalho do menu continuava apontando para ela.
+    """
+    antiga = targets.install_dir
+    _run(wizard, fake_payload, targets, menu_shortcut=True, path_symlink=True)
+    assert (antiga / "telegram-jellyfin-organizer").exists()
+
+    nova = tmp_path / "outro-lugar" / "telegram-jellyfin-organizer"
+    ok, detail = _run(
+        wizard, fake_payload, targets, install_dir=nova, menu_shortcut=True
+    )
+
+    assert ok, detail
+    assert (nova / "telegram-jellyfin-organizer").exists()
+    assert not antiga.exists(), "a instalação anterior ficou para trás"
+
+
+def test_atalho_passa_a_apontar_para_a_pasta_nova(wizard, fake_payload, targets, tmp_path):
+    _run(wizard, fake_payload, targets, menu_shortcut=True)
+    nova = tmp_path / "outro-lugar" / "telegram-jellyfin-organizer"
+
+    _run(wizard, fake_payload, targets, install_dir=nova, menu_shortcut=True)
+
+    entry = targets.applications_dir / "telegram-jellyfin-organizer.desktop"
+    exec_line = next(
+        line for line in entry.read_text(encoding="utf-8").splitlines()
+        if line.startswith("Exec=")
+    )
+    assert str(nova) in exec_line
+    assert Path(exec_line.removeprefix("Exec=").removesuffix(" %U").strip('"')).exists()
+
+
+def test_nao_remove_pasta_sem_a_assinatura_da_instalacao(
+    wizard, fake_payload, targets, tmp_path
+):
+    """A trava do `rm -rf` guiado por caminho lido de arquivo.
+
+    O `.desktop` pode estar corrompido, editado à mão ou apontando para outro
+    programa. Sem exigir a assinatura (executável + uninstall.sh), o alvo
+    poderia ser qualquer pasta — inclusive o $HOME.
+    """
+    inocente = tmp_path / "documentos-importantes"
+    inocente.mkdir()
+    (inocente / "tese.odt").write_text("não me apague", encoding="utf-8")
+
+    targets.applications_dir.mkdir(parents=True, exist_ok=True)
+    (targets.applications_dir / "telegram-jellyfin-organizer.desktop").write_text(
+        f'[Desktop Entry]\nType=Application\nExec="{inocente}/telegram-jellyfin-organizer" %U\n',
+        encoding="utf-8",
+    )
+
+    ok, detail = _run(wizard, fake_payload, targets)
+
+    assert ok, detail
+    assert (inocente / "tese.odt").exists(), "apagou uma pasta que não era nossa"
+
+
+def test_nao_mexe_em_instalacao_gerenciada_pelo_deb(
+    wizard, fake_payload, targets, tmp_path
+):
+    """Instalação do .deb não tem uninstall.sh: a remoção é do dpkg.
+
+    Apagar os arquivos por fora deixaria o pacote registrado como instalado
+    sem os arquivos — um estado que só o usuário consegue desfazer à mão.
+    """
+    do_deb = tmp_path / "opt-deb" / "telegram-jellyfin-organizer"
+    do_deb.mkdir(parents=True)
+    (do_deb / "telegram-jellyfin-organizer").write_text("#!/bin/sh\n", encoding="utf-8")
+
+    targets.applications_dir.mkdir(parents=True, exist_ok=True)
+    (targets.applications_dir / "telegram-jellyfin-organizer.desktop").write_text(
+        f'[Desktop Entry]\nType=Application\nExec="{do_deb}/telegram-jellyfin-organizer" %U\n',
+        encoding="utf-8",
+    )
+
+    _run(wizard, fake_payload, targets)
+
+    assert (do_deb / "telegram-jellyfin-organizer").exists()
+
+
+def test_reinstalar_na_mesma_pasta_nao_se_autodestroi(wizard, fake_payload, targets):
+    """A pasta de destino não pode entrar na lista de "instalações anteriores".
+
+    Se entrasse, seria removida *depois* da cópia e a instalação terminaria
+    com a pasta vazia, relatando sucesso.
+    """
+    _run(wizard, fake_payload, targets, menu_shortcut=True, path_symlink=True)
+    ok, detail = _run(wizard, fake_payload, targets, menu_shortcut=True, path_symlink=True)
+
+    assert ok, detail
+    assert (targets.install_dir / "telegram-jellyfin-organizer").exists()
+    assert (targets.install_dir / "uninstall.sh").exists()

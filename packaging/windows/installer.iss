@@ -14,6 +14,12 @@
 #endif
 
 #define MyAppName "Telegram Jellyfin Organizer"
+; Mesmo GUID do AppId, sem as chaves. Serve para achar a instalação anterior
+; no registro: a chave de desinstalação do Inno é "<AppId>_is1". A diretiva
+; #if no fim do [Setup] falha o build se os dois divergirem — divergência que
+; não daria erro nenhum, só faria o instalador não encontrar a versão velha e
+; deixá-la para trás no disco.
+#define MyAppGuid "7A80F824-E8A9-4C62-AC6A-97EEE24850CD"
 ; Nome da pasta de dados do usuário. Tem que casar exatamente com o APP_NAME
 ; de core/credentials.py — é o que o platformdirs usa para montar
 ; %LOCALAPPDATA%\<appname> no Windows. Errar aqui faz o desinstalador
@@ -69,6 +75,10 @@ ArchitecturesInstallIn64BitMode=x64compatible
 MinVersion=10.0
 ShowLanguageDialog=no
 
+#if Pos(MyAppGuid, SetupSetting("AppId")) == 0
+  #error MyAppGuid nao corresponde ao AppId: o instalador nao encontraria a versao anterior.
+#endif
+
 [Languages]
 Name: "brazilianportuguese"; MessagesFile: "compiler:Languages\BrazilianPortuguese.isl"
 
@@ -100,15 +110,88 @@ Type: dirifempty; Name: "{app}"
 brazilianportuguese.WelcomeLabel2=Este assistente vai instalar o [name/ver] no seu computador.%n%nO programa baixa mídia dos grupos do Telegram dos quais você já é membro, já organizada no padrão de pastas do Jellyfin.%n%nRecomendamos fechar todos os outros aplicativos antes de continuar.
 
 [Code]
+const
+  PreviousUninstallKey =
+    'Software\Microsoft\Windows\CurrentVersion\Uninstall\{{#MyAppGuid}}_is1';
+
 // Sem isto, atualizar por cima de uma instalação em uso falha com "arquivo
 // bloqueado" no meio da cópia — um erro que o usuário não tem como resolver.
-function InitializeSetup(): Boolean;
+procedure CloseRunningApp();
 var
   ResultCode: Integer;
 begin
   Exec('taskkill.exe', '/F /IM {#MyAppExeName}', '', SW_HIDE,
        ewWaitUntilTerminated, ResultCode);
+end;
+
+function PreviousUninstaller(): String;
+var
+  Value: String;
+begin
+  Result := '';
+  // Instalação "só para mim" grava em HKCU; "para todos os usuários", em
+  // HKLM — e um instalador de 32 bits num Windows 64 bits enxerga a chave na
+  // view de 32 bits. Procurar nos três cobre quem atualiza por cima de uma
+  // instalação feita de outro jeito.
+  if RegQueryStringValue(HKCU, PreviousUninstallKey, 'UninstallString', Value) then
+    Result := Value
+  else if RegQueryStringValue(HKLM, PreviousUninstallKey, 'UninstallString', Value) then
+    Result := Value
+  else if RegQueryStringValue(HKLM32, PreviousUninstallKey, 'UninstallString', Value) then
+    Result := Value;
+end;
+
+function InitializeSetup(): Boolean;
+begin
+  CloseRunningApp();
   Result := True;
+end;
+
+// Remove a versão anterior antes de copiar a nova. Fica em PrepareToInstall,
+// e não em InitializeSetup, de propósito: aqui o usuário já confirmou a
+// instalação. Desinstalar antes disso apagaria a versão que ele tem
+// funcionando caso ele desistisse no meio do assistente.
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  Uninstaller, Params: String;
+  ResultCode: Integer;
+begin
+  Result := '';
+
+  Uninstaller := RemoveQuotes(PreviousUninstaller());
+  if Uninstaller = '' then
+    exit;
+  if not FileExists(Uninstaller) then
+    exit;  // entrada órfã no registro: não há nada para remover
+
+  CloseRunningApp();
+
+  // `_?=` precisa ser o último parâmetro, e é ele que faz a diferença aqui:
+  // sem ele o desinstalador se copia para o %TEMP% e devolve o controle na
+  // hora, de modo que ewWaitUntilTerminated não espera nada — a remoção da
+  // versão antiga aconteceria *durante* ou *depois* da cópia dos arquivos
+  // novos, apagando parte da instalação recém-feita. Com `_?=` ele roda no
+  // lugar e a espera é real.
+  //
+  // /SUPPRESSMSGBOXES faz todo MsgBox devolver o botão padrão. A pergunta
+  // sobre apagar credenciais, em CurUninstallStepChanged, é MB_DEFBUTTON2
+  // sobre um MB_YESNO — ou seja, padrão "Não". É isso que garante que
+  // atualizar não desloga ninguém do Telegram: NÃO mude esse botão padrão
+  // sem reler este comentário.
+  Params := '/SILENT /NORESTART /SUPPRESSMSGBOXES _?=' + ExtractFileDir(Uninstaller);
+
+  if not Exec(Uninstaller, Params, '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+  begin
+    // Sobrescrever é pior que remover antes, mas é muito melhor que abortar a
+    // instalação: o usuário fica com a versão nova funcionando.
+    Log('Falha ao executar o desinstalador anterior: ' + Uninstaller);
+    exit;
+  end;
+
+  // Rodando com `_?=`, o desinstalador não consegue apagar a si mesmo. O
+  // resto da pasta já foi; limpar o que sobrou evita deixar um unins000.*
+  // de uma versão antiga para trás quando a nova vai para outra pasta.
+  DelTree(ExtractFileDir(Uninstaller) + '\unins*', False, True, False);
 end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);

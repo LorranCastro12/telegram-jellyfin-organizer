@@ -261,6 +261,68 @@ class InstallWorker(QObject):
             "Keywords=telegram;jellyfin;download;midia;\n"
         )
 
+    @staticmethod
+    def _looks_like_our_install(path: Path) -> bool:
+        """Confere a assinatura de uma instalação feita por este assistente.
+
+        Esta é a trava de segurança de um `rm -rf` cujo caminho foi *lido de
+        um arquivo*: se o `.desktop` estiver corrompido, editado à mão ou
+        apontando para outro programa, o alvo pode ser qualquer pasta —
+        inclusive o `$HOME`. Só removemos o que tem o executável **e** o
+        `uninstall.sh` que nós mesmos escrevemos.
+
+        De quebra, exigir o `uninstall.sh` impede mexer numa instalação feita
+        pelo `.deb`: lá a remoção é do dpkg, e apagar os arquivos por fora
+        deixaria o pacote registrado como instalado sem os arquivos.
+        """
+        if not path.is_dir():
+            return False
+        return (path / APP_EXE).is_file() and (path / "uninstall.sh").is_file()
+
+    def _previous_install_dirs(self, new_dir: Path) -> list[Path]:
+        """Instalações anteriores que estejam fora da pasta de destino.
+
+        A versão antiga não está necessariamente onde a nova vai: o usuário
+        pode ter trocado a pasta no assistente, ou instalado antes como root
+        (`/opt`) e agora como usuário comum (`~/.local/share`). Sem procurar,
+        a cópia velha fica no disco com atalho e tudo, e o usuário termina com
+        duas versões instaladas sem saber qual delas abriu.
+
+        As pistas são o que o próprio instalador escreveu na vez anterior: o
+        `Exec=` do atalho de menu e o alvo do symlink no PATH.
+        """
+        candidates: set[Path] = set()
+
+        entries = [self.targets.applications_dir / f"{APP_ID}.desktop"]
+        desktop_dir = self._user_desktop_dir()
+        if desktop_dir is not None:
+            entries.append(desktop_dir / f"{APP_ID}.desktop")
+        for entry in entries:
+            try:
+                content = entry.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            for line in content.splitlines():
+                if not line.startswith("Exec="):
+                    continue
+                target = line.removeprefix("Exec=").removesuffix(" %U").strip().strip('"')
+                if target:
+                    candidates.add(Path(target).parent)
+
+        link = self.targets.bin_dir / APP_EXE
+        if link.is_symlink():
+            try:
+                candidates.add(Path(os.readlink(link)).resolve().parent)
+            except OSError:
+                pass
+
+        found = []
+        for candidate in sorted(candidates):
+            if candidate == new_dir or not self._looks_like_our_install(candidate):
+                continue
+            found.append(candidate)
+        return found
+
     def _write_uninstaller(self, install_dir: Path, created: list[Path]) -> Path:
         """Gera um script que desfaz exatamente o que foi criado agora."""
         lines = [
@@ -309,11 +371,20 @@ class InstallWorker(QObject):
         files = self._files_to_copy()
         total = max(len(files), 1)
 
+        # Procura a versão antiga ANTES de mexer em qualquer coisa: as pistas
+        # (symlink do PATH) apontam para dentro das pastas que vamos apagar.
+        elsewhere = self._previous_install_dirs(install_dir)
+
         # Instalação por cima de uma versão anterior: limpa antes para não
         # deixar arquivos órfãos de uma release velha.
         if install_dir.exists() and (install_dir / APP_EXE).exists():
             self.progress.emit(0, "Removendo a versão anterior...")
             shutil.rmtree(install_dir, ignore_errors=True)
+
+        for old_dir in elsewhere:
+            self.progress.emit(0, f"Removendo a versão anterior em {old_dir}...")
+            shutil.rmtree(old_dir, ignore_errors=True)
+
         install_dir.mkdir(parents=True, exist_ok=True)
 
         for index, src in enumerate(files, start=1):
