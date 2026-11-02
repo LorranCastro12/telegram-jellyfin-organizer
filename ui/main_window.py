@@ -27,7 +27,14 @@ from PySide6.QtWidgets import (
 
 from config.settings import SettingsManager
 from core.credentials import CredentialStore
-from core.models import DownloadStatus, DownloadTask, MediaFile, ParsedMediaInfo, TelegramGroup
+from core.models import (
+    DownloadStatus,
+    DownloadTask,
+    MediaFile,
+    MediaPage,
+    ParsedMediaInfo,
+    TelegramGroup,
+)
 from core.telegram_client import TelegramWorker
 from ui.login_dialog import LoginDialog
 from ui.settings_dialog import SettingsDialog
@@ -259,30 +266,45 @@ class MainWindow(QMainWindow):
         self.settings.pinned_group_ids = list(group_ids)
         self.settings_manager.save(self.settings)
 
-    def _on_media_ready(self, files: list[MediaFile], has_more: bool) -> None:
+    def _on_media_ready(self, page: MediaPage) -> None:
         # Resposta atrasada de um grupo que o usuário já trocou: descarta.
         # Sem esta guarda, pedir "Carregar mais" e clicar em outro grupo antes
         # da resposta chegar misturava os arquivos dos dois grupos na mesma
-        # lista — a página que volta é anexada à listagem do grupo novo.
-        if files and self.current_group and files[0].group_id != self.current_group.id:
+        # lista — e, pior, os ponteiros de navegação da fatia antiga passavam a
+        # valer para o grupo novo.
+        if self.current_group is None or page.group_id != self.current_group.id:
             logger.debug(
-                "Ignorando %d arquivos do grupo %s; o grupo aberto agora é %s.",
-                len(files),
-                files[0].group_id,
-                self.current_group.id,
+                "Ignorando fatia do grupo %s; o grupo aberto agora é %s.",
+                page.group_id,
+                self.current_group.id if self.current_group else None,
             )
             return
 
         if self._load_more_offset == 0:
-            self.media_list_widget.set_files(files)
+            self.media_list_widget.set_files(page.files)
         else:
-            self.media_list_widget.append_files(files)
-        if files:
-            self._load_more_offset = files[-1].message_id
-            self._newest_message_id = max(
-                [self._newest_message_id] + [f.message_id for f in files]
+            self.media_list_widget.append_files(page.files)
+
+        # Os ponteiros andam pelo id de *mensagem* da fatia, nunca pelo id do
+        # último arquivo nela. Era daí que vinha o beco sem saída: uma fatia de
+        # 100 mensagens sem nenhuma mídia (um trecho de conversa) deixava o
+        # offset parado, e "Carregar mais" repetia a mesma consulta para sempre
+        # — todo o histórico anterior àquele trecho ficava inalcançável.
+        if page.oldest_message_id:
+            self._load_more_offset = page.oldest_message_id
+        self._newest_message_id = max(self._newest_message_id, page.newest_message_id)
+        self.media_list_widget.set_load_more_enabled(page.hit_limit)
+
+        if page.files:
+            self.statusBar().showMessage(f"{len(page.files)} arquivos carregados.", 4000)
+        elif page.hit_limit:
+            self.statusBar().showMessage(
+                "Nenhum arquivo neste trecho do histórico — use "
+                "\"Carregar mais arquivos\" para continuar procurando.",
+                8000,
             )
-        self.statusBar().showMessage(f"{len(files)} arquivos carregados.", 4000)
+        else:
+            self.statusBar().showMessage("Nenhum arquivo neste grupo.", 4000)
 
     def _on_load_more_requested(self) -> None:
         if self.current_group and self._load_more_offset:
@@ -313,22 +335,31 @@ class MainWindow(QMainWindow):
             self.current_group.id, after_message_id=self._newest_message_id
         )
 
-    def _on_new_media_ready(self, files: list[MediaFile], truncated: bool) -> None:
+    def _on_new_media_ready(self, page: MediaPage) -> None:
         self.media_list_widget.set_refreshing(False)
-        added = self.media_list_widget.prepend_new_files(files)
-        if files:
-            self._newest_message_id = max(
-                [self._newest_message_id] + [f.message_id for f in files]
-            )
+        if self.current_group is None or page.group_id != self.current_group.id:
+            logger.debug("Ignorando checagem do grupo %s, que não é o aberto.", page.group_id)
+            return
 
-        if not added:
-            self.statusBar().showMessage("Nenhum arquivo novo no grupo.", 4000)
-        elif truncated:
+        # A checagem varre do mais antigo para o mais novo (ver
+        # `_async_check_new_media`), então os arquivos chegam em ordem
+        # crescente de id. Invertemos para que o mais recente termine no topo.
+        added = self.media_list_widget.prepend_new_files(list(reversed(page.files)))
+
+        # A marca d'água pode avançar mesmo quando a varredura bateu no limite,
+        # e mesmo quando a fatia não trouxe arquivo nenhum: por ser contígua,
+        # tudo até `newest_message_id` foi realmente lido. É isso que impede o
+        # "Atualizar" de ficar relendo o mesmo trecho de conversa a cada clique.
+        self._newest_message_id = max(self._newest_message_id, page.newest_message_id)
+
+        if page.hit_limit:
             self.statusBar().showMessage(
-                f"{len(added)} arquivo(s) novo(s) no topo da lista — pode haver mais: "
-                "selecione o grupo novamente para recarregar tudo.",
+                f"{len(added)} arquivo(s) novo(s) no topo da lista — ainda há "
+                "mensagens novas para varrer: clique em Atualizar outra vez.",
                 10000,
             )
+        elif not added:
+            self.statusBar().showMessage("Nenhum arquivo novo no grupo.", 4000)
         else:
             self.statusBar().showMessage(
                 f"{len(added)} arquivo(s) novo(s) no topo da lista.", 6000

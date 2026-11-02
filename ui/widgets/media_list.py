@@ -146,6 +146,19 @@ class MediaListWidget(QWidget):
     def set_refresh_enabled(self, enabled: bool) -> None:
         self.refresh_btn.setEnabled(enabled)
 
+    def set_load_more_enabled(self, enabled: bool) -> None:
+        """Liga ou desliga o "Carregar mais" conforme ainda haja histórico.
+
+        O botão ficava permanentemente ativo, inclusive no fim do grupo, e
+        clicar nele apenas respondia "0 arquivos carregados" — indistinguível
+        do caso em que a paginação estava travada num beco sem saída. Dizer
+        "todos os arquivos carregados" separa um do outro.
+        """
+        self.load_more_btn.setEnabled(enabled)
+        self.load_more_btn.setText(
+            "Carregar mais arquivos..." if enabled else "Todos os arquivos carregados"
+        )
+
     def set_refreshing(self, refreshing: bool) -> None:
         """Trava o botão durante a consulta, para não empilhar requisições."""
         self.refresh_btn.setEnabled(not refreshing)

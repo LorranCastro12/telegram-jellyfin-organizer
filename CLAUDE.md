@@ -32,6 +32,22 @@ contra a API real do Telegram (exigiria uma conta e número de telefone reais).
   com um parser de regex simples como fallback caso a biblioteca não esteja
   instalada. O resultado é sempre editável na UI antes de confirmar o
   download — nunca vira pasta/arquivo sem revisão do usuário.
+- **A varredura do histórico é paginada por id de *mensagem*, não de
+  arquivo** (`core/models.MediaPage`). Uma fatia pode não trazer arquivo
+  nenhum — um trecho só de conversa — e ainda assim precisa dizer até onde
+  leu. E a checagem incremental do botão "Atualizar" usa `reverse=True` de
+  propósito: do mais novo para o mais antigo, bater no limite deixa sem ler o
+  intervalo entre o limite e a marca d'água, e avançar a marca depois disso
+  torna esse intervalo inalcançável para sempre. Do mais antigo para o mais
+  novo a varredura é contígua à marca d'água, então cortar no limite só
+  adianta menos terreno. Não troque por `reverse=False` sem ler
+  `tests/test_media_pagination.py`.
+- **Mídia sem nome de arquivo nunca é descartada.** Vídeo enviado do celular
+  "como vídeo" é recodificado pelo Telegram e perde o
+  `DocumentAttributeFilename`; `synthesize_file_name` inventa um nome a partir
+  da legenda (é onde se escreve o título nesses envios) ou do id da mensagem.
+  Descartar em silêncio significava um arquivo que existe no grupo e não
+  aparece na lista por mais que o usuário atualize ou reabra o app.
 - **Camada `core/` não depende de `QtWidgets`**, só de `QtCore` (para
   `QThread`/`Signal`). Mantém a lógica de negócio testável sem precisar de UI.
 - **Empacotamento**: PyInstaller (onedir) nas duas plataformas. No Windows o

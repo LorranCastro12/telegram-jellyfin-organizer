@@ -88,6 +88,37 @@ class MediaFile:
 
 
 @dataclass
+class MediaPage:
+    """Uma fatia do histórico de um grupo, com as marcas de navegação.
+
+    Os dois ids são de *mensagem*, não de arquivo, e é exatamente essa a razão
+    de a classe existir. Uma fatia pode voltar sem nenhuma mídia — um trecho
+    só de conversa — e ainda assim precisa mover o ponteiro da paginação
+    adiante. Enquanto a MainWindow derivava o próximo offset do último
+    *arquivo* da fatia, um trecho de 100 mensagens sem mídia travava o
+    "Carregar mais" no mesmo offset para sempre, e todo o histórico anterior
+    àquele trecho ficava inalcançável.
+
+    `group_id` viaja junto porque a resposta é assíncrona: sem ele, uma fatia
+    vazia que chega depois de o usuário trocar de grupo é indistinguível de
+    uma fatia do grupo atual, e seus ponteiros contaminam a navegação do
+    grupo novo.
+    """
+
+    group_id: int = 0
+    files: list[MediaFile] = field(default_factory=list)
+    newest_message_id: int = 0  # maior id visto; marca d'água do "Atualizar"
+    oldest_message_id: int = 0  # menor id visto; próximo offset do "Carregar mais"
+    hit_limit: bool = False
+    """A varredura parou no limite, não no fim do intervalo pedido.
+
+    Lido de forma diferente por quem pede: na listagem significa "ainda há
+    histórico mais antiga além desta fatia"; na checagem incremental,
+    "ainda há mensagens novas que não couberam nesta passada".
+    """
+
+
+@dataclass
 class ParsedMediaInfo:
     """Resultado da análise do nome do arquivo (via guessit) + ajustes manuais."""
 
